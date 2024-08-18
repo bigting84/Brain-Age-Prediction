@@ -12,6 +12,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from lib import models, graph, coarsening
 import config
+from lib.utils import train_val_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import KFold
@@ -19,7 +20,7 @@ from sklearn.model_selection import KFold
 age_df = pd.read_excel('./resources/neonates_age_all_clean.xlsx')
 age_df = age_df.loc[:,['ID','scan age']]
 
-df_values_list = [pd.read_table(f'./data/pre_{ID}_features_vertices.txt',header=None).values for ID in age_df['ID']]
+df_values_list = [pd.read_table('./data/pre_' + str(ID) + '_features_vertices.txt', header=None).values for ID in age_df['ID']]
 
 df_values = np.stack(df_values_list,axis=0)
 df_values = df_values[:,:,[0,1,2]].astype('float32')
@@ -44,19 +45,26 @@ cfg = coarsening.coarsen(adj_matrix, levels=9, self_connections=False)
 graphs = cfg[0]
 perm = cfg[1]
 
+
+df_values = df_values[:, 0:num_nodes, :]
+
+
 data = coarsening.perm_data(df_values[:,:,:], perm)
 data = data.astype('float32')
 
 L = [graph.laplacian(A, normalized=True).astype('float32') for A in graphs]
 
 y = age_df['scan age'].values
-kf = KFold(n_splits=5,shuffle=True,random_state=98)
-kf_split = kf.split(X=data,y=y)
+# kf = KFold(n_splits=5,shuffle=True,random_state=98)
+# kf_split = kf.split(X=data,y=y)
 
-valid_pred_all,valid_labels_all,fold, IDall = [],[],[],[]
-i=0
+test_pred_all, test_labels_all, fold,  IDall = [],[],[],[]
+
 params = vars(config.args)
-for train_ind,test_ind in kf_split:
+
+# for train_ind, test_ind in kf_split:
+for i in range(0, 5):
+    train_ind, valid_ind, test_ind = train_val_test_split(fold=i, num=len(data))
     print('data shape',data.shape)
     train_data = data[train_ind,:,:]
     train_data = train_data.reshape([train_data.shape[0],-1])
@@ -64,31 +72,39 @@ for train_ind,test_ind in kf_split:
     train_data_trans = scaler.fit_transform(train_data)
     train_data_trans = train_data_trans.reshape([train_data.shape[0],-1,n_features])
     train_labels = y[train_ind].astype('float32')
-    valid_data = data[test_ind,:,:]
+
+    valid_data = data[valid_ind,:,:]
     valid_data = valid_data.reshape([valid_data.shape[0],-1])
     valid_data_trans = scaler.transform(valid_data)
     valid_data_trans = valid_data_trans.reshape([valid_data.shape[0],-1,n_features])
-    valid_labels = y[test_ind].astype('float32')
+    valid_labels = y[valid_ind].astype('float32')
 
-    mean_predict = np.tile(train_labels.mean(),valid_labels.shape)
+    test_data = data[test_ind,:,:]
+    test_data = test_data.reshape([test_data.shape[0],-1])
+    test_data_trans = scaler.transform(test_data)
+    test_data_trans = test_data_trans.reshape([test_data.shape[0],-1,n_features])
+    test_labels = y[test_ind].astype('float32')
+
+    mean_predict = np.tile(train_labels.mean(), valid_labels.shape)
     print('baseline MSE: ', mean_squared_error(valid_labels,mean_predict))
 
     model = models.cgcnn(L, **params)
     model.fit(train_data=train_data_trans,train_labels=train_labels,val_data=valid_data_trans,val_labels=valid_labels)
-    y_pred = model.predict(data=valid_data_trans)
 
-    plt.scatter(valid_labels,y_pred)
+    y_pred = model.predict(data=test_data_trans)
 
-    valid_pred_all.append(y_pred)
-    valid_labels_all.append(valid_labels)
+    plt.scatter(test_labels, y_pred)
+
+    test_pred_all.append(y_pred)
+    test_labels_all.append(test_labels)
     IDall.append(age_df.ID[test_ind].tolist())
     fold.append([i]*len(y_pred))
-    i+=1
+
     break
 
 flatten = lambda z: [x for y in z for x in y]
-pred_array = flatten(valid_pred_all)
-true_array = flatten(valid_labels_all)
+pred_array = flatten(test_pred_all)
+true_array = flatten(test_labels_all)
 IDall = flatten(IDall)
 fold = flatten(fold)
 
